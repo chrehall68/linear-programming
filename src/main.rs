@@ -1,9 +1,41 @@
-mod canonical;
+mod lp;
 
-use canonical::canonicalize;
 use fraction::{Fraction, Zero};
+use lp::{canonicalize, solve};
 use std::io::{self, Write};
 use std::panic;
+
+#[derive(Clone, Copy)]
+enum Mode {
+    Canonicalize,
+    Solve,
+}
+
+fn read_mode() -> Mode {
+    println!("\nChoose a mode:");
+    println!("  1) canonicalize - reduce to canonical form using an exact pivot order you choose");
+    println!("  2) solve        - run the simplex method starting from a basic feasible solution you choose");
+    loop {
+        match prompt("Mode (1/2): ").as_str() {
+            "1" => return Mode::Canonicalize,
+            "2" => return Mode::Solve,
+            _ => println!("  → please enter 1 or 2"),
+        }
+    }
+}
+
+/// Extracts a human-readable message from a caught panic payload, falling
+/// back to a generic message when the payload isn't a plain string (as
+/// produced by `panic!`/`assert!`).
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        s.to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "unknown error".to_string()
+    }
+}
 
 fn prompt(msg: &str) -> String {
     print!("{msg}");
@@ -212,31 +244,40 @@ fn main() {
     println!("\nEnter the {num_vars} objective coefficient(s), as in z = c1*x1 + c2*x2 + ...");
     let objective = read_fraction_row("Objective: ", num_vars);
 
-    println!(
-        "\nPick {num_constraints} variable(s) (by number, 1-{num_vars}) to be basic in the BFS."
-    );
+    let mode = read_mode();
+    match mode {
+        Mode::Canonicalize => println!(
+            "\nPick {num_constraints} variable(s) (by number, 1-{num_vars}) to be basic, in the exact pivot order to use."
+        ),
+        Mode::Solve => println!(
+            "\nPick {num_constraints} variable(s) (by number, 1-{num_vars}) for the starting basic feasible solution."
+        ),
+    }
 
     // Set a silent panic hook while we probe candidate bases, since an
-    // incompatible choice of basic variables makes canonicalize() assert/panic.
+    // incompatible choice of basic variables makes canonicalize()/solve() assert/panic.
     let default_hook = panic::take_hook();
     panic::set_hook(Box::new(|_| {}));
 
-    let (steps, basic_history) = loop {
+    let steps = loop {
         let variables = read_index_row(
             "Basic variables, space-separated: ",
             num_constraints,
             num_vars,
         );
 
-        let attempt = panic::catch_unwind(panic::AssertUnwindSafe(|| {
-            canonicalize(equations.clone(), objective.clone(), variables.clone())
+        let eqs = equations.clone();
+        let obj = objective.clone();
+        let attempt = panic::catch_unwind(panic::AssertUnwindSafe(move || match mode {
+            Mode::Canonicalize => canonicalize(eqs, obj, variables),
+            Mode::Solve => solve(eqs, obj, variables),
         }));
 
         match attempt {
-            Ok(steps) => break (steps, variables),
-            Err(_) => println!(
-                "  → that choice doesn't form a valid basis (columns aren't independent, \
-                or a chosen variable is zero in every remaining row). Try different variables."
+            Ok(steps) => break steps,
+            Err(e) => println!(
+                "  → that didn't work ({}). Try different variables.",
+                panic_message(&*e)
             ),
         }
     };
@@ -252,14 +293,14 @@ fn main() {
         &basic_var_for_row,
     );
 
-    for (step_num, (step, &chosen)) in steps.iter().zip(basic_history.iter()).enumerate() {
-        basic_var_for_row[step.pivot_row] = Some(chosen);
+    for (step_num, step) in steps.iter().enumerate() {
+        basic_var_for_row[step.pivot_row] = Some(step.pivot_var);
 
         print_tableau(
             &format!(
                 "Step {}: pivot on x{} (row {})",
                 step_num + 1,
-                chosen + 1,
+                step.pivot_var + 1,
                 step.pivot_row + 1
             ),
             &step.equations,
