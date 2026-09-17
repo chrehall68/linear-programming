@@ -1,5 +1,3 @@
-use core::num;
-
 // convert a system of equations into canonical form
 // for a given number of variables
 // returns the intermediate steps too
@@ -124,7 +122,9 @@ pub fn canonicalize(
 }
 /// attempt to solve a linear program
 /// given an equation in standard form and a set of variables
-/// to start with
+/// to start with.
+/// The given variables must form a basic feasible solution,
+/// and if they don't, this will panic
 pub fn solve(
     equations: Vec<(Vec<Fraction>, Fraction)>,
     objective: Vec<Fraction>,
@@ -133,27 +133,26 @@ pub fn solve(
     let num_equations = equations.len();
     let cur_equations = preprocess(equations, objective, Fraction::zero(), variables.len());
     let (mut steps, mut which_vars) = canonicalize_inner(cur_equations, variables.clone());
+    let mut last = steps.last().unwrap();
+    let mut coeffs = last.equations.clone();
+    let mut objective = last.objective.0.clone();
+
+    // first make sure we're in a feasible solution
+    // if we are, then all other things we visit will also be feasible
+    for row in 0..num_equations {
+        if coeffs[row].1 < Fraction::zero() {
+            panic!("not in a feasible solution");
+        }
+    }
     // then we just need to check the objective
-    while steps
-        .last()
-        .unwrap()
-        .objective
-        .0
-        .iter()
-        .any(|x| x < &Fraction::zero())
-    {
+    while objective.iter().any(|x| x < &Fraction::zero()) {
+        // make sure we're in a feasible solution
         // there's at least one variable with a negative coefficient in our objective
         // so now verify that the objective is bounded
-        let last = steps.last().unwrap();
-        let coeffs = last.equations.clone();
-        let objective = last.objective.0.clone();
         for v in 0..objective.len() {
             if objective[v] < Fraction::zero() {
                 // make sure that the variable is bounded
-                let mut bounded = false;
-                for row in 0..num_equations {
-                    bounded = bounded || coeffs[row].0[v] > Fraction::zero();
-                }
+                let bounded = (0..num_equations).any(|row| coeffs[row].0[v] > Fraction::zero());
                 if !bounded {
                     panic!("objective is unbounded");
                 }
@@ -184,6 +183,7 @@ pub fn solve(
             .filter(|x| *x != to_replace_var)
             .collect();
         next_variables.push(most_negative);
+        // run and then advance
         let next_equations = preprocess(coeffs, objective, last.objective.1, next_variables.len());
         let (mut next_steps, next_which_vars) =
             canonicalize_inner(next_equations, next_variables.clone());
@@ -194,6 +194,10 @@ pub fn solve(
         steps.push(next_steps.pop().unwrap());
         which_vars = next_which_vars;
         variables = next_variables;
+        last = steps.last().unwrap();
+        coeffs = last.equations.clone();
+        objective = last.objective.0.clone();
     }
     steps
 }
+// TODO - 2-phase simplex to find the BFS first
