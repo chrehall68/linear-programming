@@ -1,25 +1,32 @@
 mod lp;
 
 use fraction::{Fraction, Zero};
-use lp::{canonicalize, solve};
+use lp::{canonicalize, solve_with_bfs};
 use std::io::{self, Write};
 use std::panic;
+
+use crate::lp::solve;
 
 #[derive(Clone, Copy)]
 enum Mode {
     Canonicalize,
+    SolveWithBfs,
     Solve,
 }
 
 fn read_mode() -> Mode {
     println!("\nChoose a mode:");
     println!("  1) canonicalize - reduce to canonical form using an exact pivot order you choose");
-    println!("  2) solve        - run the simplex method starting from a basic feasible solution you choose");
+    println!(
+        "  2) solve with bfs  - run the simplex method starting from a basic feasible solution you choose"
+    );
+    println!("  3) solve         - run the simplex method starting with artificial variables");
     loop {
-        match prompt("Mode (1/2): ").as_str() {
+        match prompt("Mode (1/2/3): ").as_str() {
             "1" => return Mode::Canonicalize,
-            "2" => return Mode::Solve,
-            _ => println!("  → please enter 1 or 2"),
+            "2" => return Mode::SolveWithBfs,
+            "3" => return Mode::Solve,
+            _ => println!("  → please enter 1, 2, or 3"),
         }
     }
 }
@@ -249,36 +256,44 @@ fn main() {
         Mode::Canonicalize => println!(
             "\nPick {num_constraints} variable(s) (by number, 1-{num_vars}) to be basic, in the exact pivot order to use."
         ),
-        Mode::Solve => println!(
+        Mode::SolveWithBfs => println!(
             "\nPick {num_constraints} variable(s) (by number, 1-{num_vars}) for the starting basic feasible solution."
         ),
+        Mode::Solve => (),
     }
 
     // Set a silent panic hook while we probe candidate bases, since an
     // incompatible choice of basic variables makes canonicalize()/solve() assert/panic.
     let default_hook = panic::take_hook();
-    panic::set_hook(Box::new(|_| {}));
 
     let steps = loop {
-        let variables = read_index_row(
-            "Basic variables, space-separated: ",
-            num_constraints,
-            num_vars,
-        );
+        match mode {
+            Mode::Solve => break solve(equations.clone(), objective.clone()),
+            _ => {
+                panic::set_hook(Box::new(|_| {}));
 
-        let eqs = equations.clone();
-        let obj = objective.clone();
-        let attempt = panic::catch_unwind(panic::AssertUnwindSafe(move || match mode {
-            Mode::Canonicalize => canonicalize(eqs, obj, variables),
-            Mode::Solve => solve(eqs, obj, variables),
-        }));
+                let variables = read_index_row(
+                    "Basic variables, space-separated: ",
+                    num_constraints,
+                    num_vars,
+                );
 
-        match attempt {
-            Ok(steps) => break steps,
-            Err(e) => println!(
-                "  → that didn't work ({}). Try different variables.",
-                panic_message(&*e)
-            ),
+                let eqs = equations.clone();
+                let obj = objective.clone();
+                let attempt = panic::catch_unwind(panic::AssertUnwindSafe(move || match mode {
+                    Mode::Canonicalize => canonicalize(eqs, obj, variables),
+                    Mode::SolveWithBfs => solve_with_bfs(eqs, obj, variables),
+                    _ => unreachable!(),
+                }));
+
+                match attempt {
+                    Ok(steps) => break steps,
+                    Err(e) => println!(
+                        "  → that didn't work ({}). Try different variables.",
+                        panic_message(&*e)
+                    ),
+                }
+            }
         }
     };
     panic::set_hook(default_hook);

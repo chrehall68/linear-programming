@@ -125,7 +125,7 @@ pub fn canonicalize(
 /// to start with.
 /// The given variables must form a basic feasible solution,
 /// and if they don't, this will panic
-pub fn solve(
+pub fn solve_with_bfs(
     equations: Vec<(Vec<Fraction>, Fraction)>,
     objective: Vec<Fraction>,
     mut variables: Vec<usize>,
@@ -200,4 +200,52 @@ pub fn solve(
     }
     steps
 }
-// TODO - 2-phase simplex to find the BFS first
+/// This function will attempt to solve a linear program
+/// by running the simplex method twice:
+/// once to find a BFS, once to find a solution.
+/// If there is no solution or the objective is unbounded, it will panic
+/// All RHS values must be >= 0
+pub fn solve(equations: Vec<(Vec<Fraction>, Fraction)>, objective: Vec<Fraction>) -> Vec<Step> {
+    // first, artificially augment the equations to force each one
+    // to have an artificial variable
+    // and then we run solve_with_bfs on that
+    if equations.iter().any(|f| f.1 < Fraction::zero()) {
+        panic!("RHS must be >= 0");
+    }
+    // now add artificial variables
+    let original_num_vars = equations[0].0.len();
+    let mut new_equations = equations.clone();
+    let mut new_objective = vec![Fraction::zero(); original_num_vars];
+    let mut new_vars = Vec::new();
+    for i in 0..equations.len() {
+        for j in 0..equations.len() {
+            let val = if i == j {
+                Fraction::one()
+            } else {
+                Fraction::zero()
+            };
+            new_equations[i].0.push(val);
+        }
+        // we want to minimize the artificial variables
+        new_objective.push(Fraction::one());
+        new_vars.push(i + original_num_vars);
+    }
+    // and run solve_with_bfs
+    let first_part_steps = solve_with_bfs(new_equations, new_objective, new_vars);
+    // we know that it's possible iff the objective was minimized to 0
+    if first_part_steps.last().unwrap().objective.1 != Fraction::zero() {
+        panic!("There are no solutions to this problem");
+    }
+    // now we just need to see what variables we used
+    let mut used_rows = vec![false; equations.len()];
+    let mut variables = Vec::new();
+    for step in first_part_steps.iter().rev() {
+        if !used_rows[step.pivot_row] {
+            used_rows[step.pivot_row] = true;
+            variables.push(step.pivot_var);
+        }
+    }
+    assert!(variables.len() == equations.len());
+    // and run solve_with_bfs again
+    solve_with_bfs(equations, objective, variables)
+}
