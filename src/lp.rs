@@ -44,6 +44,7 @@ fn canonicalize_inner(
 ) -> (Vec<Step>, Vec<usize>) {
     let mut steps = Vec::new();
     let mut which_vars = vec![None; equations.len() - 1];
+    let mut to_assign = Vec::new();
 
     for chosen in variables {
         // find a row where the chosen variable is not zero
@@ -56,9 +57,12 @@ fn canonicalize_inner(
                 break;
             }
         }
-        assert!(pivot_row.is_some());
-        which_vars[pivot_row.unwrap()] = Some(chosen);
-        let pivot_row = pivot_row.unwrap();
+        let Some(pivot_row) = pivot_row else {
+            to_assign.push(chosen);
+            continue;
+        };
+        which_vars[pivot_row] = Some(chosen);
+        let pivot_row = pivot_row;
         let pivot_val = equations[pivot_row][chosen];
         // now normalize the pivot row
         let pivot_inv = Fraction::one() / pivot_val;
@@ -86,6 +90,16 @@ fn canonicalize_inner(
             chosen,
         ));
         equations = next_equations;
+    }
+    // assign the remaining variables
+    for chosen in to_assign {
+        for i in 0..(equations.len() - 1) {
+            if which_vars[i].is_none() {
+                which_vars[i] = Some(chosen);
+                steps.push(Step::from_equations(equations.clone(), i, chosen));
+                break;
+            }
+        }
     }
     (steps, which_vars.into_iter().map(|x| x.unwrap()).collect())
 }
@@ -238,14 +252,71 @@ pub fn solve(equations: Vec<(Vec<Fraction>, Fraction)>, objective: Vec<Fraction>
     }
     // now we just need to see what variables we used
     let mut used_rows = vec![false; equations.len()];
+    let mut used_variable = vec![false; original_num_vars];
     let mut variables = Vec::new();
+    let mut keep_row = vec![true; equations.len()];
     for step in first_part_steps.iter().rev() {
         if !used_rows[step.pivot_row] {
-            used_rows[step.pivot_row] = true;
-            variables.push(step.pivot_var);
+            if step.pivot_var < original_num_vars {
+                assert!(keep_row[step.pivot_row]);
+                used_rows[step.pivot_row] = true;
+                used_variable[step.pivot_var] = true;
+                variables.push(step.pivot_var);
+            } else {
+                // if we chose to use an artificial variable, it must be because there's
+                // nothing else in the row
+                assert!(
+                    first_part_steps.last().unwrap().equations[step.pivot_row].1
+                        == Fraction::zero()
+                );
+                // it doesn't matter what we choose; just take a variable with nonzero coefficient
+                let mut nonzero_coef = None;
+                for i in 0..original_num_vars {
+                    if !used_variable[i]
+                        && first_part_steps.last().unwrap().equations[step.pivot_row].0[i]
+                            != Fraction::zero()
+                    {
+                        nonzero_coef = Some(i);
+                        break;
+                    }
+                }
+                if let Some(i) = nonzero_coef {
+                    // otherwise, we can use it
+                    used_rows[step.pivot_row] = true;
+                    used_variable[i] = true;
+                    variables.push(i);
+                } else {
+                    // drop the row since it's useless
+                    keep_row[step.pivot_row] = false;
+                }
+            }
         }
     }
-    assert!(variables.len() == equations.len());
+    assert!(variables.len() == keep_row.iter().filter(|x| **x).count());
+    // then filter
+    let mut new_equations = Vec::new();
+    for (row, keep) in equations.iter().zip(keep_row.iter()) {
+        if *keep {
+            new_equations.push(row.clone());
+        }
+    }
+    if new_equations.len() == 0 {
+        if objective.iter().all(|x| *x > Fraction::zero()) {
+            // one solution: have all variables = 0
+            return vec![Step {
+                equations: vec![(vec![Fraction::zero(); original_num_vars], Fraction::zero())],
+                objective: (objective, Fraction::zero()),
+                pivot_row: 0,
+                pivot_var: 0,
+            }];
+        } else {
+            // infinitely many solutions since there's at least one variable
+            // with objective value <= 0. Then, we can just take any nonnegative real value for that
+            // to get infinite solutions
+            panic!("Infinitely many solutions");
+        }
+    }
+    // now we just need to find a BFS
     // and run solve_with_bfs again
-    solve_with_bfs(equations, objective, variables)
+    solve_with_bfs(new_equations, objective, variables)
 }
