@@ -1,4 +1,5 @@
 mod lp;
+mod problem;
 
 use fraction::{Fraction, Zero};
 use lp::{canonicalize, solve_with_bfs};
