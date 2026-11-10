@@ -1,14 +1,14 @@
 // convert a system of equations into canonical form
 // for a given number of variables
 // returns the intermediate steps too
-use crate::problem::{Problem, Tableau};
-use fraction::{Fraction, One, Zero};
+use crate::problem::Tableau;
+use fraction::{Fraction, Zero};
 
 /// Convert a system of equations into canonical form
 /// requires that the assigned basic variables are linearly independent
 /// Returns [initial tableau, intermediate steps]. If the tableau is already in canonical form,
 /// only returns [initial tableau]
-fn canonicalize(mut prev_tableau: Tableau) -> Vec<Tableau> {
+fn canonicalize(mut prev_tableau: Tableau) -> Result<Vec<Tableau>, &'static str> {
     let mut steps = vec![prev_tableau.clone()];
     for pivot_row in 0..prev_tableau.constraints.len() {
         // find a row where the chosen variable is not zero
@@ -16,6 +16,9 @@ fn canonicalize(mut prev_tableau: Tableau) -> Vec<Tableau> {
         let tableau_row = &prev_tableau.constraints[pivot_row];
         let pivot_var = tableau_row.basic_var;
         let pivot_val = tableau_row.row.coefficients[pivot_var];
+        if pivot_val == Fraction::zero() {
+            return Err("Variables are not linearly independent");
+        }
         let normalized_row = tableau_row.row.clone() / pivot_val;
         // now normalize the pivot row
         let mut next_tableau = prev_tableau.clone();
@@ -37,15 +40,15 @@ fn canonicalize(mut prev_tableau: Tableau) -> Vec<Tableau> {
         }
         prev_tableau = next_tableau;
     }
-    steps
+    Ok(steps)
 }
 
 /// Attempt to solve a linear program by using the simplex method
 /// given an initial tableau.
 /// The given variables in the initial tableau must form a basic feasible solution,
 /// and if they don't, this will panic
-pub fn simplex_method(initial_tableau: Tableau) -> Vec<Tableau> {
-    let mut steps = canonicalize(initial_tableau);
+pub fn simplex_method(initial_tableau: Tableau) -> Result<Vec<Tableau>, &'static str> {
+    let mut steps = canonicalize(initial_tableau)?;
     let mut last = steps.last().unwrap().clone();
 
     // first make sure we're in a feasible solution
@@ -54,7 +57,7 @@ pub fn simplex_method(initial_tableau: Tableau) -> Vec<Tableau> {
     // and no restriction on whether objective coefficients are >= 0
     for table_row in &last.constraints {
         if table_row.row.rhs < Fraction::zero() {
-            panic!("not in a feasible solution");
+            return Err("Cannot use simplex method; RHS must be >= 0");
         }
     }
     // then we just need to check the objective
@@ -78,7 +81,7 @@ pub fn simplex_method(initial_tableau: Tableau) -> Vec<Tableau> {
                     .iter()
                     .any(|table_row| table_row.row.coefficients[var] > Fraction::zero());
                 if !bounded {
-                    panic!("objective is unbounded");
+                    return Err("Objective is unbounded");
                 }
             }
         }
@@ -100,19 +103,19 @@ pub fn simplex_method(initial_tableau: Tableau) -> Vec<Tableau> {
             .0;
         last.constraints[to_exit_row].basic_var = to_enter;
         // canonicalize with respect to the new basic variable, and then advance
-        let mut next_steps = canonicalize(last.clone());
+        let mut next_steps = canonicalize(last.clone())?;
         steps.append(&mut next_steps);
         last = steps.last().unwrap().clone();
     }
-    steps
+    Ok(steps)
 }
 
 /// Attempt to solve a linear program by using the simplex method
 /// given an initial tableau
 /// The given variables in the initial tableau must form a basic feasible solution,
 /// and if they don't, this will panic
-pub fn dual_simplex_method(initial_tableau: Tableau) -> Vec<Tableau> {
-    let mut steps = canonicalize(initial_tableau);
+pub fn dual_simplex_method(initial_tableau: Tableau) -> Result<Vec<Tableau>, &'static str> {
+    let mut steps = canonicalize(initial_tableau)?;
     let mut last = steps.last().unwrap().clone();
 
     // first make sure we're in a feasible solution
@@ -121,7 +124,7 @@ pub fn dual_simplex_method(initial_tableau: Tableau) -> Vec<Tableau> {
     // and no restriction on whether RHS is >= 0
     for coeff in &last.objective.coefficients {
         if *coeff < Fraction::zero() {
-            panic!("not in a feasible solution");
+            return Err("Cannot use dual simplex; objective coefficients must be >= 0");
         }
     }
     // then we just need to check the objective
@@ -134,18 +137,16 @@ pub fn dual_simplex_method(initial_tableau: Tableau) -> Vec<Tableau> {
     };
     while let Some((to_exit_row, _)) = find_most_negative_row(&last) {
         // make sure we're in a feasible solution
-        // there's at least one variable with a negative coefficient in our RHS
-        // so now verify that the objective is bounded
         for row in last.constraints.iter() {
             if row.row.rhs < Fraction::zero() {
-                // make sure that the row is bounded (has at least one negative coefficient)
+                // make sure that the row is satisfiable (ie there exists a coefficient < 0)
                 let bounded = row
                     .row
                     .coefficients
                     .iter()
                     .any(|&coeff| coeff < Fraction::zero());
                 if !bounded {
-                    panic!("objective is unbounded");
+                    return Err("No feasible solution");
                 }
             }
         }
@@ -168,9 +169,9 @@ pub fn dual_simplex_method(initial_tableau: Tableau) -> Vec<Tableau> {
             .0;
         last.constraints[to_exit_row].basic_var = to_enter;
         // canonicalize with respect to the new basic variable, and then advance
-        let mut next_steps = canonicalize(last.clone());
+        let mut next_steps = canonicalize(last.clone())?;
         steps.append(&mut next_steps);
         last = steps.last().unwrap().clone();
     }
-    steps
+    Ok(steps)
 }
