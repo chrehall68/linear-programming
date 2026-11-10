@@ -192,3 +192,101 @@ pub fn dual_simplex_method(initial_tableau: Tableau) -> Result<Vec<Tableau>, &'s
     }
     Ok(steps)
 }
+
+#[cfg(test)]
+mod tests {
+    use fraction::{Fraction, Zero};
+
+    use super::{canonicalize, simplex_method};
+    use crate::problem::{Row, TableRow, Tableau};
+
+    fn row(coefficients: &[i64], rhs: i64) -> Row {
+        Row {
+            coefficients: coefficients.iter().map(|&c| Fraction::from(c)).collect(),
+            rhs: Fraction::from(rhs),
+        }
+    }
+
+    fn tableau(rows: &[(&[i64], i64, usize)], objective: &[i64]) -> Tableau {
+        Tableau {
+            constraints: rows
+                .iter()
+                .map(|&(coefficients, rhs, basic_var)| TableRow {
+                    row: row(coefficients, rhs),
+                    basic_var,
+                })
+                .collect(),
+            objective: row(objective, 0),
+            secondary_objective: None,
+        }
+    }
+
+    #[test]
+    fn canonicalize_pivots_each_row() {
+        // x1 + x2 = 3, x1 - x2 = 1 with basis (x1, x2) gives x1 = 2, x2 = 1
+        let steps = canonicalize(tableau(&[(&[1, 1], 3, 0), (&[1, -1], 1, 1)], &[1, 1])).unwrap();
+        let last = steps.last().unwrap();
+        assert!(last.constraints[0].row == row(&[1, 0], 2));
+        assert!(last.constraints[1].row == row(&[0, 1], 1));
+        assert!(last.objective == row(&[0, 0], -3));
+    }
+
+    #[test]
+    fn canonicalize_already_canonical() {
+        let initial = tableau(&[(&[1, 0], 1, 0), (&[0, 1], 1, 1)], &[0, 0]);
+        let steps = canonicalize(initial.clone()).unwrap();
+        assert!(steps == vec![initial]);
+    }
+
+    #[test]
+    fn canonicalize_rejects_dependent_basis() {
+        // x1 has a zero coefficient in the second row once the first is pivoted on
+        let result = canonicalize(tableau(&[(&[1, 1], 1, 0), (&[2, 2], 2, 0)], &[0, 0]));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn simplex_stops_when_optimal() {
+        // already optimal: no negative objective coefficients
+        let steps = simplex_method(tableau(&[(&[1, 1], 4, 0)], &[0, 1])).unwrap();
+        assert_eq!(steps.len(), 1);
+    }
+
+    #[test]
+    fn simplex_finds_optimum() {
+        // min -x1 - 2x2 s.t. x1 + x2 + x3 = 4, starting from x3
+        let steps = simplex_method(tableau(&[(&[1, 1, 1], 4, 2)], &[-1, -2, 0])).unwrap();
+        let last = steps.last().unwrap();
+        assert_eq!(last.constraints[0].basic_var, 1);
+        assert_eq!(last.objective.rhs, Fraction::from(8));
+    }
+
+    #[test]
+    fn simplex_rejects_infeasible_start() {
+        let result = simplex_method(tableau(&[(&[1, 1], -1, 0)], &[1, 1]));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn simplex_detects_unbounded() {
+        // x1 - x2 + x3 = 1: x2 can grow forever
+        let result = simplex_method(tableau(&[(&[1, -1, 1], 1, 2)], &[0, -1, 0]));
+        assert_eq!(result.err(), Some("Objective is unbounded"));
+    }
+
+    #[test]
+    fn simplex_rhs_stays_nonnegative() {
+        let steps = simplex_method(tableau(
+            &[(&[1, 0, 1, 0], 4, 2), (&[1, 2, 0, 1], 6, 3)],
+            &[-2, -1, 0, 0],
+        ))
+        .unwrap();
+        for step in &steps {
+            assert!(
+                step.constraints
+                    .iter()
+                    .all(|r| r.row.rhs >= Fraction::zero())
+            );
+        }
+    }
+}
