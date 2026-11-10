@@ -33,7 +33,12 @@ pub fn canonicalize(mut prev_tableau: Tableau) -> Result<Vec<Tableau>, &'static 
         }
         // and from the objective row
         let objective_scaler = next_tableau.objective.coefficients[pivot_var];
-        next_tableau.objective -= normalized_row * objective_scaler;
+        next_tableau.objective -= normalized_row.clone() * objective_scaler;
+        // and the secondary objective, if there is one
+        if let Some(secondary_objective) = &mut next_tableau.secondary_objective {
+            let secondary_scaler = secondary_objective.coefficients[pivot_var];
+            *secondary_objective -= normalized_row * secondary_scaler;
+        }
         // and add it to the result and advance
         if prev_tableau != next_tableau {
             steps.push(next_tableau.clone());
@@ -66,8 +71,14 @@ pub fn simplex_method(initial_tableau: Tableau) -> Result<Vec<Tableau>, &'static
             .coefficients
             .iter()
             .enumerate()
+            .filter_map(|(var, &coeff)| {
+                if coeff < Fraction::zero() {
+                    Some((var, coeff))
+                } else {
+                    None
+                }
+            })
             .min_by_key(|(_index, val)| *val)
-            .map(|(idx, &val)| (idx, val))
     };
     while let Some((to_enter, _)) = find_most_negative_var(&last) {
         // make sure we're in a feasible solution
@@ -132,8 +143,14 @@ pub fn dual_simplex_method(initial_tableau: Tableau) -> Result<Vec<Tableau>, &'s
         last.constraints
             .iter()
             .enumerate()
-            .min_by_key(|(_index, table_row)| table_row.row.rhs)
-            .map(|(idx, table_row)| (idx, table_row.row.rhs))
+            .filter_map(|(row_idx, table_row)| {
+                if table_row.row.rhs < Fraction::zero() {
+                    Some((row_idx, table_row.row.rhs))
+                } else {
+                    None
+                }
+            })
+            .min_by_key(|(_index, rhs)| *rhs)
     };
     while let Some((to_exit_row, _)) = find_most_negative_row(&last) {
         // make sure we're in a feasible solution

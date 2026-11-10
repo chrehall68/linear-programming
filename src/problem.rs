@@ -60,6 +60,7 @@ impl Div<Fraction> for Row {
 // ==================================================
 // Problem Setup
 // ==================================================
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Inequality {
     Eq,
     Le,
@@ -79,8 +80,8 @@ pub struct InputConstraint {
     pub inequality: Inequality,
 }
 pub struct Problem {
-    pub constraints: Vec<InputConstraint>,
-    pub objective: Row,
+    pub(crate) constraints: Vec<InputConstraint>,
+    pub(crate) objective: Row,
 }
 impl Problem {
     pub fn new(constraints: Vec<InputConstraint>, objective: Row) -> Problem {
@@ -133,4 +134,5 @@ pub struct TableRow {
 pub struct Tableau {
     pub constraints: Vec<TableRow>,
     pub objective: Row,
+    pub secondary_objective: Option<Row>, // used when doing 2-phase simplex
 }

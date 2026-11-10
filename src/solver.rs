@@ -13,13 +13,32 @@ use crate::{
 /// If there is no solution or the objective is unbounded, it will error
 /// All RHS values must be >= 0
 ///
-/// Returns (first_pass_steps, second_pass_steps)
-pub fn solve(mut problem: Problem) -> Result<(Vec<Tableau>, Vec<Tableau>), &'static str> {
+/// Returns (first_pass_steps, second_pass_steps, variable_names)
+pub fn solve(
+    mut problem: Problem,
+) -> Result<(Vec<Tableau>, Vec<Tableau>, Vec<String>), &'static str> {
     // first add the slack and artificial variables
     let initial_vars = problem.num_vars();
     let mut added_slacks = 0;
-    let mut artificial_idxs = Vec::new();
+    let mut added_artificials = 0;
+    // count initially that way we can construct all artificials at end
+    let total_slacks = problem
+        .constraints
+        .iter()
+        .filter(|c| c.inequality == Inequality::Le || c.inequality == Inequality::Ge)
+        .count();
+    let total_artificial = problem
+        .constraints
+        .iter()
+        .filter(|c| c.inequality == Inequality::Eq || c.inequality == Inequality::Ge)
+        .count();
     let mut variable_names: Vec<_> = (0..initial_vars).map(|v| format!("x{}", v + 1)).collect();
+    for i in 1..=total_slacks {
+        variable_names.push(format!("s{i}"));
+    }
+    for i in 1..=total_artificial {
+        variable_names.push(format!("a{i}"));
+    }
     let mut tableau_rows: Vec<_> = problem
         .constraints
         .iter_mut()
@@ -30,7 +49,7 @@ pub fn solve(mut problem: Problem) -> Result<(Vec<Tableau>, Vec<Tableau>), &'sta
                 constraint.inequality = constraint.inequality.opposite();
             }
             // add extras
-            for _ in 0..(added_slacks + artificial_idxs.len()) {
+            for _ in 0..(total_slacks + total_artificial) {
                 constraint.row.coefficients.push(Fraction::zero());
             }
             // then maybe add slack or artificial or both
@@ -39,16 +58,15 @@ pub fn solve(mut problem: Problem) -> Result<(Vec<Tableau>, Vec<Tableau>), &'sta
                 Inequality::Le => {
                     // since we have ... <= b, just do
                     // ... + s = b
-                    constraint.row.coefficients.push(Fraction::one());
-                    variable_names.push(format!("s{}", added_slacks + 1));
+                    constraint.row.coefficients[initial_vars + added_slacks] = Fraction::one();
                     added_slacks += 1;
                 }
                 Inequality::Eq => {
                     // since we have ... = b, do
                     // ... + a = b, and we'd expect a to become 0
-                    constraint.row.coefficients.push(Fraction::one());
-                    variable_names.push(format!("a{}", artificial_idxs.len() + 1));
-                    artificial_idxs.push(constraint.row.coefficients.len() - 1);
+                    constraint.row.coefficients[initial_vars + total_slacks + added_artificials] =
+                        Fraction::one();
+                    added_artificials += 1;
                 }
                 Inequality::Ge => {
                     // we have ... >= b, so we make it
@@ -56,13 +74,12 @@ pub fn solve(mut problem: Problem) -> Result<(Vec<Tableau>, Vec<Tableau>), &'sta
                     // as a pivot, giving
                     // ... - s + a = b
                     // slack first
-                    constraint.row.coefficients.push(-Fraction::one());
-                    variable_names.push(format!("s{}", added_slacks + 1));
+                    constraint.row.coefficients[initial_vars + added_slacks] = Fraction::one();
                     added_slacks += 1;
                     // then artificial since that's what we'll use as our BV
-                    constraint.row.coefficients.push(Fraction::one());
-                    artificial_idxs.push(constraint.row.coefficients.len() - 1);
-                    variable_names.push(format!("a{}", artificial_idxs.len() + 1));
+                    constraint.row.coefficients[initial_vars + total_slacks + added_artificials] =
+                        Fraction::one();
+                    added_artificials += 1;
                 }
             }
             TableRow {
@@ -71,19 +88,15 @@ pub fn solve(mut problem: Problem) -> Result<(Vec<Tableau>, Vec<Tableau>), &'sta
             }
         })
         .collect();
-    // pad remaining
-    for tableau_row in tableau_rows.iter_mut() {
-        while tableau_row.row.coefficients.len()
-            < initial_vars + added_slacks + artificial_idxs.len()
-        {
-            tableau_row.row.coefficients.push(Fraction::zero());
-        }
-    }
     // then construct the objective row
     let mut objective_coeffs =
-        vec![Fraction::zero(); initial_vars + added_slacks + artificial_idxs.len()];
-    for &artificial_var in &artificial_idxs {
-        objective_coeffs[artificial_var] = Fraction::one();
+        vec![Fraction::zero(); initial_vars + total_slacks + total_artificial];
+    for i in 0..total_artificial {
+        objective_coeffs[initial_vars + total_slacks + i] = Fraction::one();
+    }
+    let mut original_objective = problem.objective.clone();
+    while original_objective.coefficients.len() < initial_vars + total_slacks + total_artificial {
+        original_objective.coefficients.push(Fraction::zero());
     }
     let artificial_tableau = Tableau {
         objective: Row {
@@ -91,6 +104,7 @@ pub fn solve(mut problem: Problem) -> Result<(Vec<Tableau>, Vec<Tableau>), &'sta
             rhs: Fraction::zero(),
         },
         constraints: tableau_rows,
+        secondary_objective: Some(original_objective),
     };
 
     // then run simplex method
@@ -101,21 +115,17 @@ pub fn solve(mut problem: Problem) -> Result<(Vec<Tableau>, Vec<Tableau>), &'sta
     }
 
     // now construct tableau w/o artificials
-    // if there's any remaining artificials, then we can
+    // if there's any remaining artificials in our BFS, then we can
     // pivot on a nonzero regular variable to move the artificial out of our BFS
     // and if there are no nonzero regular variables in the row, the row is redundant and can be skipped
     let mut last = artificial_steps.last().unwrap().clone();
-    let mut is_artificial = vec![false; initial_vars + added_slacks + artificial_idxs.len()];
     let mut removed_row = vec![false; last.constraints.len()];
-    for &artificial_var in &artificial_idxs {
-        is_artificial[artificial_var] = true;
-    }
     while let Some(row_idx) = last
         .constraints
         .iter()
         .enumerate()
         .filter_map(|(row_idx, tableau_row)| {
-            if !removed_row[row_idx] && !is_artificial[tableau_row.basic_var] {
+            if !removed_row[row_idx] && tableau_row.basic_var >= initial_vars + added_slacks {
                 Some(row_idx)
             } else {
                 None
@@ -123,10 +133,8 @@ pub fn solve(mut problem: Problem) -> Result<(Vec<Tableau>, Vec<Tableau>), &'sta
         })
         .next()
     {
-        let pivot_var = (0..(initial_vars + added_slacks + artificial_idxs.len())).find(|&var| {
-            !is_artificial[var]
-                && last.constraints[row_idx].row.coefficients[var] != Fraction::zero()
-        });
+        let pivot_var = (0..(initial_vars + added_slacks))
+            .find(|&var| last.constraints[row_idx].row.coefficients[var] != Fraction::zero());
         if let Some(pivot_var) = pivot_var {
             // pivot on this
             last.constraints[row_idx].basic_var = pivot_var;
@@ -134,18 +142,24 @@ pub fn solve(mut problem: Problem) -> Result<(Vec<Tableau>, Vec<Tableau>), &'sta
             artificial_steps.append(&mut pivot_steps);
             last = artificial_steps.last().unwrap().clone();
         } else {
+            // safe to remove since we know rhs must be zero since total objective is 0
             removed_row[row_idx] = true;
         }
     }
 
-    // remove redundant rows
+    // remove redundant rows and truncate to just original variables and slacks
     let filtered_constraints: Vec<_> = last
         .constraints
         .iter()
         .enumerate()
         .filter_map(|(row_idx, tableau_row)| {
             if !removed_row[row_idx] {
-                Some(tableau_row.clone())
+                let mut tableau_row = tableau_row.clone();
+                tableau_row
+                    .row
+                    .coefficients
+                    .truncate(initial_vars + added_slacks);
+                Some(tableau_row)
             } else {
                 None
             }
@@ -153,42 +167,33 @@ pub fn solve(mut problem: Problem) -> Result<(Vec<Tableau>, Vec<Tableau>), &'sta
         .collect();
 
     // now solve the problem with the reduced tableau and original objective
-    let mut original_objective = problem.objective.clone();
-    while original_objective.coefficients.len()
-        < initial_vars + added_slacks + artificial_idxs.len()
-    {
-        original_objective.coefficients.push(Fraction::zero());
-    }
+    let mut next_objective = last.secondary_objective.unwrap();
+    next_objective
+        .coefficients
+        .truncate(initial_vars + added_slacks);
 
     // before starting, be careful about 0 constraints
     if filtered_constraints.len() == 0 {
-        if original_objective
+        if next_objective
             .coefficients
             .iter()
-            .all(|x| *x > Fraction::zero())
+            .all(|x| *x >= Fraction::zero())
         {
             // one solution: have all variables = 0
             return Ok((
                 artificial_steps,
                 vec![Tableau {
-                    objective: Row {
-                        coefficients: vec![
-                            Fraction::zero();
-                            initial_vars + added_slacks + artificial_idxs.len()
-                        ],
-                        rhs: Fraction::zero(),
-                    },
+                    objective: next_objective,
                     constraints: vec![TableRow {
                         row: Row {
-                            coefficients: vec![
-                                Fraction::zero();
-                                initial_vars + added_slacks + artificial_idxs.len()
-                            ],
+                            coefficients: vec![Fraction::zero(); initial_vars + total_slacks],
                             rhs: Fraction::zero(),
                         },
                         basic_var: 0,
                     }],
+                    secondary_objective: None,
                 }],
+                variable_names,
             ));
         } else {
             // infinitely many solutions since there's at least one variable
@@ -203,9 +208,10 @@ pub fn solve(mut problem: Problem) -> Result<(Vec<Tableau>, Vec<Tableau>), &'sta
     // otherwise, we have at least one constraint
     // so we can solve it regularly
     let second_pass_tableau = Tableau {
-        objective: original_objective,
+        objective: next_objective,
         constraints: filtered_constraints,
+        secondary_objective: None,
     };
     let second_pass_steps = simplex_method(second_pass_tableau)?;
-    Ok((artificial_steps, second_pass_steps))
+    Ok((artificial_steps, second_pass_steps, variable_names))
 }
