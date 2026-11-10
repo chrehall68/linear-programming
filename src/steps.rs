@@ -8,7 +8,7 @@ use fraction::{Fraction, Zero};
 /// requires that the assigned basic variables are linearly independent
 /// Returns [initial tableau, intermediate steps]. If the tableau is already in canonical form,
 /// only returns [initial tableau]
-fn canonicalize(mut prev_tableau: Tableau) -> Result<Vec<Tableau>, &'static str> {
+pub fn canonicalize(mut prev_tableau: Tableau) -> Result<Vec<Tableau>, &'static str> {
     let mut steps = vec![prev_tableau.clone()];
     for pivot_row in 0..prev_tableau.constraints.len() {
         // find a row where the chosen variable is not zero

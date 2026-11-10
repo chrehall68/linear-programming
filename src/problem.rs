@@ -65,9 +65,18 @@ pub enum Inequality {
     Le,
     Ge,
 }
+impl Inequality {
+    pub fn opposite(&self) -> Inequality {
+        match *self {
+            Inequality::Eq => Inequality::Eq,
+            Inequality::Le => Inequality::Ge,
+            Inequality::Ge => Inequality::Le,
+        }
+    }
+}
 pub struct InputConstraint {
-    row: Row,
-    inequality: Inequality,
+    pub row: Row,
+    pub inequality: Inequality,
 }
 pub struct Problem {
     pub constraints: Vec<InputConstraint>,
@@ -75,8 +84,14 @@ pub struct Problem {
 }
 impl Problem {
     pub fn new(constraints: Vec<InputConstraint>, objective: Row) -> Problem {
+        // check that we have at least one constraint
+        assert!(!constraints.is_empty(), "must have at least one constraint");
         // check that all constraints have the same number of coefficients
         let num_vars = constraints[0].row.coefficients.len();
+        assert!(
+            constraints[0].row.coefficients.len() > 0,
+            "must have at least one variable"
+        );
         for constraint in &constraints {
             assert_eq!(
                 constraint.row.coefficients.len(),
