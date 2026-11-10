@@ -60,17 +60,26 @@ impl Div<Fraction> for Row {
 // ==================================================
 // Problem Setup
 // ==================================================
+pub enum Inequality {
+    Eq,
+    Le,
+    Ge,
+}
+pub struct InputConstraint {
+    row: Row,
+    inequality: Inequality,
+}
 pub struct Problem {
-    pub constraints: Vec<Row>,
+    pub constraints: Vec<InputConstraint>,
     pub objective: Row,
 }
 impl Problem {
-    pub fn new(constraints: Vec<Row>, objective: Row) -> Problem {
+    pub fn new(constraints: Vec<InputConstraint>, objective: Row) -> Problem {
         // check that all constraints have the same number of coefficients
-        let num_vars = constraints[0].coefficients.len();
+        let num_vars = constraints[0].row.coefficients.len();
         for constraint in &constraints {
             assert_eq!(
-                constraint.coefficients.len(),
+                constraint.row.coefficients.len(),
                 num_vars,
                 "all constraints must have same number of coefficients"
             );
@@ -86,7 +95,7 @@ impl Problem {
         }
     }
     pub(crate) fn num_vars(&self) -> usize {
-        self.constraints[0].coefficients.len()
+        self.constraints[0].row.coefficients.len()
     }
     pub(crate) fn num_constraints(&self) -> usize {
         self.constraints.len()

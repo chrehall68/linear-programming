@@ -1,12 +1,13 @@
-mod lp;
 mod problem;
+mod solver;
+mod steps;
 
 use fraction::{Fraction, Zero};
-use lp::{canonicalize, solve_with_bfs};
 use std::io::{self, Write};
 use std::panic;
+use steps::{canonicalize, solve_with_bfs};
 
-use crate::lp::solve;
+use crate::steps::solve;
 
 #[derive(Clone, Copy)]
 enum Mode {
